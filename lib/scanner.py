@@ -69,12 +69,6 @@ LINGUIST_NAME_OVERRIDES: dict[str, str] = {
 # Non-language tools that Linguist doesn't cover but gitignore.io has
 # templates for. These are checked as marker files.
 TOOL_MARKERS: dict[str, str] = {
-    "Dockerfile": "docker",
-    "docker-compose.yml": "docker",
-    "docker-compose.yaml": "docker",
-    "compose.yml": "docker",
-    "compose.yaml": "docker",
-    "Containerfile": "docker",
     "ansible.cfg": "ansible",
     "playbook.yml": "ansible",
     "Vagrantfile": "vagrant",
@@ -305,7 +299,11 @@ def _load_linguist() -> tuple[dict[str, str], dict[str, str]]:
                 ext_map[ext] = slug
 
     # Add tool markers (these override linguist for non-language files)
+    # Validate that every marker slug actually exists on gitignore.io
     for fname, slug in TOOL_MARKERS.items():
+        if slug not in gi_slugs:
+            log(f"  WARN: TOOL_MARKERS[{fname!r}] = {slug!r} not in gitignore.io slugs, skipping")
+            continue
         fname_map[fname] = slug
 
     _filename_to_slug = fname_map

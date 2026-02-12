@@ -114,9 +114,6 @@ that Linguist doesn't cover:
 
 | Marker file           | Template  |
 | --------------------- | --------- |
-| `Dockerfile`          | docker    |
-| `docker-compose.yml`  | docker    |
-| `compose.yml`         | docker    |
 | `ansible.cfg`         | ansible   |
 | `Vagrantfile`         | vagrant   |
 | `Podfile`             | cocoapods |

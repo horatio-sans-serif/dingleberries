@@ -355,12 +355,12 @@ class TestDetectRepoTechs:
         techs = detect_repo_techs(tmp_path)
         assert "python" in techs
 
-    def test_docker_project(self, tmp_path):
-        """Dockerfile should detect as docker via TOOL_MARKERS."""
-        (tmp_path / "Dockerfile").write_text("FROM python:3.11")
+    def test_ansible_project(self, tmp_path):
+        """ansible.cfg should detect as ansible via TOOL_MARKERS."""
+        (tmp_path / "ansible.cfg").write_text("[defaults]")
         (tmp_path / ".git").mkdir()
         techs = detect_repo_techs(tmp_path)
-        assert "docker" in techs
+        assert "ansible" in techs
 
     def test_empty_repo(self, tmp_path):
         """Empty repo should return empty set (no tier 1 or tier 2 matches)."""
