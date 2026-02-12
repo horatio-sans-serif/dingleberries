@@ -1,0 +1,411 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ── dingleberries ──────────────────────────────────────────────────────────
+# Gitignore hygiene tool. Detects project types, fetches templates,
+# creates per-project .gitignore files, maintains a global aggregate
+# gitignore, and reports files that slipped through.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
+AGGREGATE_GITIGNORE="$HOME/projects/etc/dot-files/gitignore"
+GLOBAL_GIT_IGNORE="$HOME/.config/git/ignore"
+
+# Colors
+if [[ -t 1 ]]; then
+    RED='\033[0;31m'
+    GREEN='\033[0;32m'
+    YELLOW='\033[0;33m'
+    BLUE='\033[0;34m'
+    CYAN='\033[0;36m'
+    BOLD='\033[1m'
+    DIM='\033[2m'
+    RESET='\033[0m'
+else
+    RED='' GREEN='' YELLOW='' BLUE='' CYAN='' BOLD='' DIM='' RESET=''
+fi
+
+usage() {
+    cat <<EOF
+Usage: dingleberries [<PATH>] [-n|--dry-run] [-v|--verbose]
+
+Scan projects for gitignore hygiene issues.
+
+Arguments:
+  PATH          Directory to scan (default: ~/projects)
+
+Options:
+  -n, --dry-run   Report only, don't modify any files
+  -v, --verbose   Show detailed progress
+  -h, --help      Show this help
+
+What it does:
+  1. Detects project types (Node, Python, Go, Rust, etc.)
+  2. Fetches/caches gitignore templates from gitignore.io
+  3. Creates/updates per-project .gitignore files (managed section)
+  4. Updates the global aggregate gitignore
+  5. Sets up ~/.config/git/ignore symlink (first run)
+  6. Reports tracked files that should be ignored
+  7. Reports temporary files wasting space
+  8. Generates fix commands (git rm --cached)
+EOF
+    exit 0
+}
+
+human_size() {
+    local bytes=$1
+    if (( bytes >= 1073741824 )); then
+        printf "%.1f GB" "$(echo "scale=1; $bytes / 1073741824" | bc)"
+    elif (( bytes >= 1048576 )); then
+        printf "%.1f MB" "$(echo "scale=1; $bytes / 1048576" | bc)"
+    elif (( bytes >= 1024 )); then
+        printf "%.1f KB" "$(echo "scale=1; $bytes / 1024" | bc)"
+    else
+        printf "%d B" "$bytes"
+    fi
+}
+
+# ── Parse args ─────────────────────────────────────────────────────────────
+
+SCAN_PATH="$HOME/projects"
+DRY_RUN=false
+VERBOSE=false
+POSITIONAL_ARGS=()
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -n|--dry-run)  DRY_RUN=true; shift ;;
+        -v|--verbose)  VERBOSE=true; shift ;;
+        -h|--help)     usage ;;
+        -*)            echo "Error: Unknown option: $1" >&2; exit 1 ;;
+        *)             POSITIONAL_ARGS+=("$1"); shift ;;
+    esac
+done
+
+if [[ ${#POSITIONAL_ARGS[@]} -gt 1 ]]; then
+    echo "Error: Too many arguments. Expected at most 1 path." >&2
+    exit 1
+fi
+
+if [[ ${#POSITIONAL_ARGS[@]} -eq 1 ]]; then
+    SCAN_PATH="${POSITIONAL_ARGS[0]}"
+fi
+
+if [[ ! -d "$SCAN_PATH" ]]; then
+    echo "Error: Not a directory: $SCAN_PATH" >&2
+    exit 1
+fi
+
+# ── Symlink setup (first-run) ─────────────────────────────────────────────
+
+setup_symlink() {
+    if [[ -L "$GLOBAL_GIT_IGNORE" ]]; then
+        local target
+        target="$(readlink "$GLOBAL_GIT_IGNORE")"
+        if [[ "$target" == "$AGGREGATE_GITIGNORE" ]]; then
+            return 0
+        fi
+    fi
+
+    echo ""
+    echo -e "${BOLD}Global gitignore setup${RESET}"
+    echo "  Current:  $GLOBAL_GIT_IGNORE"
+    if [[ -L "$GLOBAL_GIT_IGNORE" ]]; then
+        echo "            (symlink -> $(readlink "$GLOBAL_GIT_IGNORE"))"
+    elif [[ -f "$GLOBAL_GIT_IGNORE" ]]; then
+        echo "            (regular file, $(wc -l < "$GLOBAL_GIT_IGNORE") lines)"
+    else
+        echo "            (does not exist)"
+    fi
+    echo "  Proposed: symlink -> $AGGREGATE_GITIGNORE"
+    echo ""
+
+    if [[ "$DRY_RUN" == true ]]; then
+        echo -e "${DIM}  [dry-run] Would create symlink${RESET}"
+        return 0
+    fi
+
+    read -rp "  Create symlink? [y/N] " answer
+    if [[ "$answer" =~ ^[Yy]$ ]]; then
+        mkdir -p "$(dirname "$GLOBAL_GIT_IGNORE")"
+        if [[ -f "$GLOBAL_GIT_IGNORE" && ! -L "$GLOBAL_GIT_IGNORE" ]]; then
+            # Safety: refuse if backup path is a symlink
+            if [[ -L "${GLOBAL_GIT_IGNORE}.bak" ]]; then
+                echo "  Error: Backup path is a symlink, aborting for safety" >&2
+                return 1
+            fi
+            cp "$GLOBAL_GIT_IGNORE" "${GLOBAL_GIT_IGNORE}.bak"
+            echo -e "  ${DIM}Backed up: ${GLOBAL_GIT_IGNORE}.bak${RESET}"
+        fi
+        ln -sf "$AGGREGATE_GITIGNORE" "$GLOBAL_GIT_IGNORE"
+        echo -e "  ${GREEN}Symlink created${RESET}"
+    else
+        echo -e "  ${DIM}Skipped${RESET}"
+    fi
+}
+
+# ── Run scanner ────────────────────────────────────────────────────────────
+
+SCANNER_FLAGS=""
+if [[ "$VERBOSE" == true ]]; then
+    SCANNER_FLAGS="$SCANNER_FLAGS --verbose"
+fi
+if [[ "$DRY_RUN" == true ]]; then
+    SCANNER_FLAGS="$SCANNER_FLAGS --dry-run"
+fi
+
+echo -e "${BOLD}Dingleberries${RESET} - gitignore hygiene tool"
+echo ""
+
+# Scan (includes per-project .gitignore creation)
+echo -e "${DIM}Scanning $SCAN_PATH...${RESET}"
+if ! SCAN_JSON=$(uv run --project "$PROJECT_ROOT" python "$PROJECT_ROOT/lib/scanner.py" scan "$SCAN_PATH" $SCANNER_FLAGS); then
+    echo "Error: Scanner failed" >&2
+    exit 1
+fi
+
+# Update global gitignore (not affected by dry-run - it's our own file)
+echo -e "${DIM}Updating global gitignore...${RESET}"
+uv run --project "$PROJECT_ROOT" python "$PROJECT_ROOT/lib/scanner.py" update-global $SCANNER_FLAGS
+
+# Setup symlink if needed
+setup_symlink
+
+# ── Parse JSON and format report ──────────────────────────────────────────
+
+parse_json() {
+    uv run --project "$PROJECT_ROOT" python -c "
+import json, sys
+
+try:
+    input_data = sys.stdin.read()
+    if not input_data.strip():
+        print('ERROR:Empty scanner output', file=sys.stderr)
+        sys.exit(1)
+
+    data = json.loads(input_data)
+
+    required = ['techs_detected', 'templates_fetched', 'templates_cached',
+                 'repos_scanned', 'dingleberries', 'waste_bytes']
+    for key in required:
+        if key not in data:
+            print(f'ERROR:Missing key: {key}', file=sys.stderr)
+            sys.exit(1)
+
+except json.JSONDecodeError as e:
+    print(f'ERROR:Invalid JSON from scanner: {e}', file=sys.stderr)
+    sys.exit(1)
+
+techs = sorted(data['techs_detected'].keys())
+fetched = data['templates_fetched']
+cached = data['templates_cached']
+repos = data['repos_scanned']
+tracked = data['dingleberries']['tracked']
+untracked = data['dingleberries']['untracked_no_coverage']
+temporary = data['dingleberries']['temporary']
+waste = data['waste_bytes']
+gi_actions = data.get('gitignore_actions', [])
+
+print(f'TECHS:{\"|\".join(techs)}')
+print(f'FETCHED:{len(fetched)}')
+print(f'CACHED:{len(cached)}')
+print(f'REPOS:{repos}')
+print(f'WASTE:{waste}')
+print(f'TRACKED_COUNT:{len(tracked)}')
+print(f'UNTRACKED_COUNT:{len(untracked)}')
+print(f'TEMP_COUNT:{len(temporary)}')
+
+# Gitignore actions
+for a in gi_actions:
+    techs_str = ', '.join(a['techs'])
+    print(f'GI_ACTION:{a[\"action\"]}:{a[\"repo\"]}:{techs_str}')
+print(f'GI_TOTAL:{len(gi_actions)}')
+
+# Group tracked by repo
+from collections import defaultdict
+by_repo = defaultdict(list)
+tracked_size = 0
+for item in tracked:
+    by_repo[item['repo']].append(item)
+    tracked_size += item['size']
+print(f'TRACKED_SIZE:{tracked_size}')
+
+for repo, items in sorted(by_repo.items()):
+    repo_size = sum(i['size'] for i in items)
+    print(f'TREPO:{repo}:{repo_size}')
+    for item in sorted(items, key=lambda x: x['file']):
+        print(f'TFILE:{repo}:{item[\"file\"]}:{item[\"size\"]}')
+
+# Summarize temporary files
+from collections import Counter
+import os.path
+temp_names = Counter()
+temp_total_size = 0
+for item in temporary:
+    name = os.path.basename(item['file'])
+    temp_names[name] += 1
+    temp_total_size += item['size']
+print(f'TEMP_SIZE:{temp_total_size}')
+
+for name, count in temp_names.most_common():
+    print(f'TEMP:{name}:{count}')
+
+for item in temporary:
+    print(f'TEMPPATH:{item[\"file\"]}')
+"
+}
+
+if ! PARSED=$(echo "$SCAN_JSON" | parse_json); then
+    echo "Error: Failed to parse scanner output" >&2
+    exit 1
+fi
+
+get_val() { echo "$PARSED" | grep "^$1:" | head -1 | cut -d: -f2-; }
+
+TECHS=$(get_val TECHS | sed 's/|/, /g')
+FETCHED=$(get_val FETCHED)
+CACHED=$(get_val CACHED)
+REPOS=$(get_val REPOS)
+WASTE=$(get_val WASTE)
+TRACKED_COUNT=$(get_val TRACKED_COUNT)
+UNTRACKED_COUNT=$(get_val UNTRACKED_COUNT)
+TEMP_COUNT=$(get_val TEMP_COUNT)
+TRACKED_SIZE=$(get_val TRACKED_SIZE)
+TEMP_SIZE=$(get_val TEMP_SIZE)
+GI_TOTAL=$(get_val GI_TOTAL)
+
+# ── Print report ──────────────────────────────────────────────────────────
+
+echo ""
+echo -e "${BOLD}Dingleberries Report${RESET}"
+echo "===================="
+echo -e "Scanned: ${BOLD}$REPOS${RESET} repos | Detected: ${BLUE}$TECHS${RESET}"
+echo -e "Templates: ${GREEN}$FETCHED fetched${RESET}, $CACHED cached"
+echo -e "Global gitignore: ${GREEN}updated${RESET} ($AGGREGATE_GITIGNORE)"
+echo ""
+
+# Per-project .gitignore actions
+if (( GI_TOTAL > 0 )); then
+    echo -e "${CYAN}${BOLD}PER-PROJECT .gitignore${RESET} ($GI_TOTAL repos):"
+    while IFS=: read -r prefix action repo techs_str; do
+        case "$action" in
+            created|would_create)
+                label="NEW"
+                color="$GREEN"
+                ;;
+            updated|would_update)
+                label="UPD"
+                color="$YELLOW"
+                ;;
+            *)
+                label="???"
+                color="$DIM"
+                ;;
+        esac
+        dry=""
+        if [[ "$action" == would_* ]]; then
+            dry=" ${DIM}[dry-run]${RESET}"
+        fi
+        echo -e "  ${color}[$label]${RESET} $repo  ${DIM}($techs_str)${RESET}$dry"
+    done <<< "$(echo "$PARSED" | grep '^GI_ACTION:')"
+    echo ""
+fi
+
+# Tracked files that should be ignored
+if (( TRACKED_COUNT > 0 )); then
+    echo -e "${RED}${BOLD}TRACKED FILES THAT SHOULD BE IGNORED${RESET} ($TRACKED_COUNT files, $(human_size "$TRACKED_SIZE")):"
+
+    while IFS=: read -r prefix repo rest; do
+        if [[ "$prefix" == "TREPO" ]]; then
+            echo -e "  ${BOLD}repo:${RESET} $repo"
+        elif [[ "$prefix" == "TFILE" ]]; then
+            file=$(echo "$rest" | cut -d: -f1)
+            size=$(echo "$rest" | cut -d: -f2)
+            echo -e "    ${RED}$file${RESET}  ${DIM}($(human_size "$size"))${RESET}"
+        fi
+    done <<< "$(echo "$PARSED" | grep -E '^(TREPO|TFILE):')"
+    echo ""
+fi
+
+# Temporary files
+if (( TEMP_COUNT > 0 )); then
+    echo -e "${YELLOW}${BOLD}TEMPORARY FILES${RESET} ($TEMP_COUNT files, $(human_size "$TEMP_SIZE")):"
+    while IFS=: read -r prefix name count; do
+        echo -e "  ${YELLOW}$name${RESET}  x $count"
+    done <<< "$(echo "$PARSED" | grep '^TEMP:' | grep -v '^TEMPPATH:' | grep -v '^TEMP_')"
+    echo ""
+fi
+
+# Untracked with no coverage
+if (( UNTRACKED_COUNT > 0 )); then
+    echo -e "${DIM}Untracked files with no gitignore coverage: $UNTRACKED_COUNT (use --verbose to see)${RESET}"
+    echo ""
+fi
+
+# Total waste
+if (( WASTE > 0 )); then
+    echo -e "Total waste: ${RED}$(human_size "$WASTE")${RESET}"
+    echo ""
+fi
+
+# ── Generate commands file ────────────────────────────────────────────────
+
+if (( TRACKED_COUNT > 0 )); then
+    CMDS_FILE=$(mktemp /tmp/dingleberries-commands.XXXXXX.sh)
+
+    {
+        echo "#!/usr/bin/env bash"
+        echo "# Generated by dingleberries on $(date)"
+        echo "# Commands to untrack files that should be ignored"
+        echo "set -euo pipefail"
+        echo ""
+
+        CURRENT_REPO=""
+        while IFS=: read -r prefix repo rest; do
+            if [[ "$prefix" == "TFILE" ]]; then
+                file=$(echo "$rest" | cut -d: -f1)
+                if [[ "$repo" != "$CURRENT_REPO" ]]; then
+                    CURRENT_REPO="$repo"
+                    echo ""
+                    echo "# Repo: $repo"
+                fi
+                # Use printf %q for proper shell escaping
+                printf 'git -C %q rm --cached %q\n' "$repo" "$file"
+            fi
+        done <<< "$(echo "$PARSED" | grep '^TFILE:')"
+    } > "$CMDS_FILE"
+    chmod 700 "$CMDS_FILE"
+
+    echo -e "Commands file: ${BOLD}$CMDS_FILE${RESET}"
+    echo ""
+
+    if [[ "$DRY_RUN" == false ]]; then
+        read -rp "Execute git rm --cached commands? [y/N] " answer
+        if [[ "$answer" =~ ^[Yy]$ ]]; then
+            echo ""
+            bash "$CMDS_FILE"
+            echo -e "${GREEN}Done. Files untracked. Commit the changes in each repo.${RESET}"
+        fi
+        echo ""
+    fi
+fi
+
+# ── Offer to delete temporary files ───────────────────────────────────────
+
+if (( TEMP_COUNT > 0 )) && [[ "$DRY_RUN" == false ]]; then
+    read -rp "Delete $TEMP_COUNT temporary files? [y/N] " answer
+    if [[ "$answer" =~ ^[Yy]$ ]]; then
+        DELETED=0
+        while IFS=: read -r prefix filepath; do
+            if [[ "$prefix" == "TEMPPATH" ]] && [[ -f "$filepath" ]]; then
+                rm -f "$filepath"
+                (( DELETED++ )) || true
+            fi
+        done <<< "$(echo "$PARSED" | grep '^TEMPPATH:')"
+        echo -e "${GREEN}Deleted $DELETED temporary files.${RESET}"
+    fi
+    echo ""
+fi
+
+echo -e "${DIM}Done.${RESET}"
