@@ -1,5 +1,7 @@
 # Dingleberries
 
+https://github.com/horatio-sans-serif/dingleberries
+
 Gitignore hygiene tool. Scans project directories, auto-detects technologies,
 fetches appropriate gitignore templates, and maintains both per-project
 `.gitignore` files and a global aggregate gitignore.
