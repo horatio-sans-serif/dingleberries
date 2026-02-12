@@ -214,11 +214,10 @@ def _linguist_name_to_slug(name: str, gi_slugs: set[str]) -> str | None:
 
     Returns None if no valid mapping exists.
     """
-    # Check explicit overrides first
+    # Check explicit overrides first (authoritative -- no fallthrough)
     if name in LINGUIST_NAME_OVERRIDES:
         slug = LINGUIST_NAME_OVERRIDES[name]
-        if slug in gi_slugs:
-            return slug
+        return slug if slug in gi_slugs else None
 
     # Try direct lowercase
     slug = name.lower()
@@ -288,6 +287,9 @@ def _load_linguist() -> tuple[dict[str, str], dict[str, str]]:
     lang_data = _linguist_data or {}
 
     for lang_name, info in lang_data.items():
+        if not isinstance(info, dict):
+            continue
+
         slug = _linguist_name_to_slug(lang_name, gi_slugs)
         if not slug:
             continue
@@ -699,9 +701,8 @@ def update_project_gitignore(repo: Path, techs: set[str],
 
 # ── Scanning ──────────────────────────────────────────────────────────────
 
-def build_repo_spec(repo: Path, tech_templates: dict[str, str]) -> pathspec.PathSpec:
+def build_repo_spec(repo_techs: set[str], tech_templates: dict[str, str]) -> pathspec.PathSpec:
     """Build a pathspec for a specific repo based on its detected technologies."""
-    repo_techs = detect_repo_techs(repo)
     patterns_parts = []
 
     for tech in sorted(UNIVERSAL_TECHS):
@@ -739,7 +740,7 @@ def scan_repos(repos: list[Path], tech_templates: dict[str, str]) -> dict:
             if result["action"] not in ("unchanged", "error"):
                 gitignore_actions.append(result)
 
-        repo_spec = build_repo_spec(repo, tech_templates)
+        repo_spec = build_repo_spec(repo_techs, tech_templates)
 
         for f in git_tracked_files(repo):
             if repo_spec.match_file(f):

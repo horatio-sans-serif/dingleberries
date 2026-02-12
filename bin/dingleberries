@@ -147,12 +147,12 @@ setup_symlink() {
 
 # ── Run scanner ────────────────────────────────────────────────────────────
 
-SCANNER_FLAGS=""
+SCANNER_FLAGS=()
 if [[ "$VERBOSE" == true ]]; then
-    SCANNER_FLAGS="$SCANNER_FLAGS --verbose"
+    SCANNER_FLAGS+=("--verbose")
 fi
 if [[ "$DRY_RUN" == true ]]; then
-    SCANNER_FLAGS="$SCANNER_FLAGS --dry-run"
+    SCANNER_FLAGS+=("--dry-run")
 fi
 
 echo -e "${BOLD}Dingleberries${RESET} - gitignore hygiene tool"
@@ -160,14 +160,14 @@ echo ""
 
 # Scan (includes per-project .gitignore creation)
 echo -e "${DIM}Scanning $SCAN_PATH...${RESET}"
-if ! SCAN_JSON=$(uv run --project "$PROJECT_ROOT" python "$PROJECT_ROOT/lib/scanner.py" scan "$SCAN_PATH" $SCANNER_FLAGS); then
+if ! SCAN_JSON=$(uv run --project "$PROJECT_ROOT" python "$PROJECT_ROOT/lib/scanner.py" scan "$SCAN_PATH" "${SCANNER_FLAGS[@]}"); then
     echo "Error: Scanner failed" >&2
     exit 1
 fi
 
 # Update global gitignore (not affected by dry-run - it's our own file)
 echo -e "${DIM}Updating global gitignore...${RESET}"
-uv run --project "$PROJECT_ROOT" python "$PROJECT_ROOT/lib/scanner.py" update-global $SCANNER_FLAGS
+uv run --project "$PROJECT_ROOT" python "$PROJECT_ROOT/lib/scanner.py" update-global "${SCANNER_FLAGS[@]}"
 
 # Setup symlink if needed
 setup_symlink
