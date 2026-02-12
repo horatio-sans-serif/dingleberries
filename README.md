@@ -288,3 +288,59 @@ Verify a slug exists by visiting:
 ```
 https://www.toptal.com/developers/gitignore/api/<slug>
 ```
+
+## Safety Guarantees
+
+This tool takes a defense-in-depth approach to prevent data loss. File
+deletion is the only destructive operation, and it is guarded at two
+independent layers (Python and bash). Both must agree before any file is
+removed.
+
+### What can be deleted
+
+Only **temporary files** matching a fixed allowlist of names and extensions:
+
+- Exact names: `.DS_Store`, `._.DS_Store`, `Thumbs.db`, `desktop.ini`
+- Extensions: `.swp`, `.swo`, `.swn`, `.tmp`, `.bak`, `.orig`
+- Tilde backups: any filename ending in `~`
+
+Nothing else is ever deleted. The `git rm --cached` command only untracks
+files from the git index -- it does not delete them from disk.
+
+### What can never be deleted
+
+Both layers independently enforce these rules. A file is **refused** if
+any of the following are true:
+
+- It is a **directory** (even if named `.DS_Store`)
+- It is a **symlink** (even if it points to a temp file)
+- It is **outside the scan root** (path traversal protection)
+- It is **inside a `.git` directory**
+- Its basename does **not match** the temp file allowlist
+- It **does not exist**
+
+### How it works
+
+1. **Python layer** (`safe_to_delete()` in `scanner.py`): validates all
+   conditions above before a file path enters the "deletable" list.
+
+2. **Bash layer** (`is_safe_to_delete()` in `bin/dingleberries`):
+   re-validates every file path independently at the deletion site, right
+   before `rm -f`. Files that fail are logged as `REFUSED` and skipped.
+
+3. **Interactive prompt**: deletion only happens after the user confirms
+   with `y` at a `[y/N]` prompt. In `--dry-run` mode, no deletion is
+   ever attempted.
+
+### Tests
+
+The `TestSafeToDelete` suite (14 tests) verifies every rejection case:
+
+- Normal files, source code, `.gitignore` -- rejected
+- Directories (even named like temp files) -- rejected
+- Symlinks (even pointing to temp files) -- rejected
+- Paths outside the scan root -- rejected
+- Path traversal (`../`) -- rejected
+- Files inside `.git` -- rejected
+- Non-existent paths -- rejected
+- Legitimate temp files in the scan root and subdirectories -- allowed
