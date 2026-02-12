@@ -13,6 +13,7 @@ from lib.scanner import (
     is_temp_file,
     parse_sectioned_gitignore,
     detect_repo_techs,
+    safe_to_delete,
     SLUG_BLOCKLIST,
 )
 
@@ -411,3 +412,102 @@ class TestIntegration:
         assert "_preamble" in result
         assert "node_modules/" in result["_preamble"]
         assert len(result) == 1  # only preamble
+
+
+# ── safe_to_delete ───────────────────────────────────────────────────────
+
+
+class TestSafeToDelete:
+    """Verify that safe_to_delete prevents deletion of anything except
+    known temp files inside the scan root."""
+
+    def test_ds_store_allowed(self, tmp_path):
+        f = tmp_path / ".DS_Store"
+        f.write_text("")
+        assert safe_to_delete(str(f), tmp_path) is True
+
+    def test_swap_file_allowed(self, tmp_path):
+        f = tmp_path / "file.swp"
+        f.write_text("")
+        assert safe_to_delete(str(f), tmp_path) is True
+
+    def test_tilde_backup_allowed(self, tmp_path):
+        f = tmp_path / "file.txt~"
+        f.write_text("")
+        assert safe_to_delete(str(f), tmp_path) is True
+
+    def test_tmp_file_allowed(self, tmp_path):
+        f = tmp_path / "data.tmp"
+        f.write_text("")
+        assert safe_to_delete(str(f), tmp_path) is True
+
+    def test_normal_file_rejected(self, tmp_path):
+        """A .py file must NEVER be deletable."""
+        f = tmp_path / "important.py"
+        f.write_text("print('hello')")
+        assert safe_to_delete(str(f), tmp_path) is False
+
+    def test_source_code_rejected(self, tmp_path):
+        """Source code must NEVER be deletable."""
+        for name in ["main.go", "app.js", "index.html", "README.md", "Makefile"]:
+            f = tmp_path / name
+            f.write_text("content")
+            assert safe_to_delete(str(f), tmp_path) is False, f"{name} should be rejected"
+
+    def test_gitignore_rejected(self, tmp_path):
+        """.gitignore must NEVER be deletable."""
+        f = tmp_path / ".gitignore"
+        f.write_text("node_modules/")
+        assert safe_to_delete(str(f), tmp_path) is False
+
+    def test_directory_rejected(self, tmp_path):
+        """Directories must NEVER be deletable."""
+        d = tmp_path / ".DS_Store"  # even if named like a temp file
+        d.mkdir()
+        assert safe_to_delete(str(d), tmp_path) is False
+
+    def test_symlink_rejected(self, tmp_path):
+        """Symlinks must NEVER be deletable (even to temp files)."""
+        real = tmp_path / "real.tmp"
+        real.write_text("")
+        link = tmp_path / "link.tmp"
+        os.symlink(str(real), str(link))
+        assert safe_to_delete(str(link), tmp_path) is False
+
+    def test_outside_scan_root_rejected(self, tmp_path):
+        """Files outside scan root must NEVER be deletable."""
+        scan_root = tmp_path / "projects"
+        scan_root.mkdir()
+        outside = tmp_path / ".DS_Store"
+        outside.write_text("")
+        assert safe_to_delete(str(outside), scan_root) is False
+
+    def test_path_traversal_rejected(self, tmp_path):
+        """Path traversal attempts must be rejected."""
+        scan_root = tmp_path / "projects"
+        scan_root.mkdir()
+        outside = tmp_path / ".DS_Store"
+        outside.write_text("")
+        # Try to escape via ../
+        traversal = str(scan_root / ".." / ".DS_Store")
+        assert safe_to_delete(traversal, scan_root) is False
+
+    def test_inside_git_dir_rejected(self, tmp_path):
+        """Files inside .git must NEVER be deletable."""
+        git_dir = tmp_path / ".git"
+        git_dir.mkdir()
+        f = git_dir / ".DS_Store"
+        f.write_text("")
+        assert safe_to_delete(str(f), tmp_path) is False
+
+    def test_nonexistent_file_rejected(self, tmp_path):
+        """Non-existent files must be rejected."""
+        assert safe_to_delete(str(tmp_path / "ghost.tmp"), tmp_path) is False
+
+    def test_nested_temp_file_allowed(self, tmp_path):
+        """Temp files in subdirectories should still be allowed."""
+        sub = tmp_path / "project" / "src"
+        sub.mkdir(parents=True)
+        f = sub / ".DS_Store"
+        f.write_text("")
+        assert safe_to_delete(str(f), tmp_path) is True

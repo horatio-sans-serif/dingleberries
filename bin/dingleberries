@@ -393,17 +393,62 @@ fi
 
 # ── Offer to delete temporary files ───────────────────────────────────────
 
+# Known safe-to-delete basenames and extensions (must match scanner.py exactly)
+SAFE_TEMP_NAMES=(".DS_Store" "._.DS_Store" "Thumbs.db" "desktop.ini")
+SAFE_TEMP_EXTS=(".swp" ".swo" ".swn" ".tmp" ".bak" ".orig")
+
+is_safe_to_delete() {
+    local filepath="$1"
+    local scan_root="$2"
+    local basename
+    basename="$(basename "$filepath")"
+
+    # 1. Must be a regular file (not dir, not symlink)
+    [[ -f "$filepath" ]] || return 1
+    [[ -L "$filepath" ]] && return 1
+
+    # 2. Must be under the scan root (no path traversal)
+    local real_path real_root
+    real_path="$(cd "$(dirname "$filepath")" 2>/dev/null && pwd)/$(basename "$filepath")"
+    real_root="$(cd "$scan_root" 2>/dev/null && pwd)"
+    [[ "$real_path" == "$real_root"/* ]] || return 1
+
+    # 3. Must not be inside a .git directory
+    [[ "$real_path" == *"/.git/"* ]] && return 1
+
+    # 4. Basename must match known temp patterns (re-validate independently)
+    for name in "${SAFE_TEMP_NAMES[@]}"; do
+        [[ "$basename" == "$name" ]] && return 0
+    done
+    for ext in "${SAFE_TEMP_EXTS[@]}"; do
+        [[ "$basename" == *"$ext" ]] && return 0
+    done
+    [[ "$basename" == *"~" ]] && return 0
+
+    # Did not match any known temp pattern - refuse to delete
+    return 1
+}
+
 if (( TEMP_COUNT > 0 )) && [[ "$DRY_RUN" == false ]]; then
     read -rp "Delete $TEMP_COUNT temporary files? [y/N] " answer
     if [[ "$answer" =~ ^[Yy]$ ]]; then
         DELETED=0
+        SKIPPED=0
         while IFS=: read -r prefix filepath; do
-            if [[ "$prefix" == "TEMPPATH" ]] && [[ -f "$filepath" ]]; then
-                rm -f "$filepath"
-                (( DELETED++ )) || true
+            if [[ "$prefix" == "TEMPPATH" ]]; then
+                if is_safe_to_delete "$filepath" "$SCAN_PATH"; then
+                    rm -f "$filepath"
+                    (( DELETED++ )) || true
+                else
+                    echo -e "  ${RED}REFUSED${RESET}: $filepath (failed safety check)"
+                    (( SKIPPED++ )) || true
+                fi
             fi
         done <<< "$(echo "$PARSED" | grep '^TEMPPATH:')"
         echo -e "${GREEN}Deleted $DELETED temporary files.${RESET}"
+        if (( SKIPPED > 0 )); then
+            echo -e "${YELLOW}Skipped $SKIPPED files that failed safety checks.${RESET}"
+        fi
     fi
     echo ""
 fi

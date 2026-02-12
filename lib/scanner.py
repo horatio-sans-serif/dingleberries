@@ -329,6 +329,43 @@ def is_temp_file(name: str) -> bool:
     return ext in TEMP_SUFFIXES
 
 
+def safe_to_delete(filepath: str, scan_root: Path) -> bool:
+    """Defense-in-depth check before any file deletion.
+
+    Returns True ONLY if ALL of these hold:
+      1. Path resolves to a regular file (not dir, not symlink)
+      2. Path is contained within scan_root (no path traversal)
+      3. Basename passes is_temp_file() (re-validated here)
+      4. File is not inside a .git directory
+    """
+    try:
+        original = Path(filepath)
+        # Check symlink BEFORE resolving (resolve follows symlinks)
+        if original.is_symlink():
+            return False
+        p = original.resolve()
+        root = scan_root.resolve()
+    except (OSError, ValueError):
+        return False
+
+    # Must be under the scan root
+    try:
+        p.relative_to(root)
+    except ValueError:
+        return False
+
+    # Must be a regular file, not a directory
+    if not p.is_file():
+        return False
+
+    # Must not be inside .git
+    if ".git" in p.parts:
+        return False
+
+    # Basename must match temp file patterns (re-validate)
+    return is_temp_file(p.name)
+
+
 def _sanitize_tech_name(tech: str) -> str:
     """Validate and return a safe tech name for use in file paths."""
     if "/" in tech or "\\" in tech or "\0" in tech:
