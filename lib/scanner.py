@@ -93,7 +93,6 @@ TOOL_MARKERS: dict[str, str] = {
 
 # Templates to always include regardless of detection
 UNIVERSAL_TECHS = frozenset({"macos", "vim"})
-ALWAYS_INCLUDE_TECHS = ["macos", "vim"]
 
 # Gitignore.io slugs to skip even if auto-matched (too generic or useless)
 SLUG_BLOCKLIST = frozenset({
@@ -399,7 +398,7 @@ def detect_techs(scan_root: Path) -> dict[str, list[str]]:
         for tech in found_here:
             techs.setdefault(tech, []).append(str(dp))
 
-    for tech in ALWAYS_INCLUDE_TECHS:
+    for tech in UNIVERSAL_TECHS:
         techs.setdefault(tech, [])
 
     return techs
@@ -541,7 +540,7 @@ def git_untracked_files(repo: Path) -> list[str]:
 
 def file_size(repo: Path, relpath: str) -> int:
     try:
-        return (repo / relpath).stat().st_size
+        return (repo / relpath).lstat().st_size
     except OSError:
         return 0
 

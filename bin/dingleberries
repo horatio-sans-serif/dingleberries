@@ -56,11 +56,11 @@ EOF
 human_size() {
     local bytes=$1
     if (( bytes >= 1073741824 )); then
-        printf "%.1f GB" "$(echo "scale=1; $bytes / 1073741824" | bc)"
+        awk "BEGIN {printf \"%.1f GB\", $bytes / 1073741824}"
     elif (( bytes >= 1048576 )); then
-        printf "%.1f MB" "$(echo "scale=1; $bytes / 1048576" | bc)"
+        awk "BEGIN {printf \"%.1f MB\", $bytes / 1048576}"
     elif (( bytes >= 1024 )); then
-        printf "%.1f KB" "$(echo "scale=1; $bytes / 1024" | bc)"
+        awk "BEGIN {printf \"%.1f KB\", $bytes / 1024}"
     else
         printf "%d B" "$bytes"
     fi
@@ -403,9 +403,9 @@ is_safe_to_delete() {
     local basename
     basename="$(basename "$filepath")"
 
-    # 1. Must be a regular file (not dir, not symlink)
-    [[ -f "$filepath" ]] || return 1
+    # 1. Must not be a symlink, must be a regular file
     [[ -L "$filepath" ]] && return 1
+    [[ -f "$filepath" ]] || return 1
 
     # 2. Must be under the scan root (no path traversal)
     local real_path real_root

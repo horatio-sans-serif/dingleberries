@@ -263,7 +263,6 @@ are cached vs fetched, detection results.
 - [pathspec](https://pypi.org/project/pathspec/) - gitignore pattern matching
 - [pyyaml](https://pypi.org/project/PyYAML/) - parsing Linguist's languages.yml
 - `git` - for `ls-files` queries
-- `bc` - for human-readable size formatting in bash
 
 ## Adding New Technologies
 
