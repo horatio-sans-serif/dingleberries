@@ -11,6 +11,7 @@ from lib.scanner import (
     _sanitize_tech_name,
     build_sectioned_gitignore,
     is_temp_file,
+    is_vendored_path,
     parse_sectioned_gitignore,
     detect_repo_techs,
     safe_to_delete,
@@ -511,3 +512,49 @@ class TestSafeToDelete:
         f = sub / ".DS_Store"
         f.write_text("")
         assert safe_to_delete(str(f), tmp_path) is True
+
+
+# ── is_vendored_path ─────────────────────────────────────────────────────
+
+
+class TestIsVendoredPath:
+    """Repos inside vendored/third-party directories should be skipped."""
+
+    def test_repo_directly_under_scan_root(self, tmp_path):
+        repo = tmp_path / "my-project"
+        repo.mkdir()
+        assert is_vendored_path(repo, tmp_path) is False
+
+    def test_repo_inside_third_party(self, tmp_path):
+        repo = tmp_path / "third_party" / "libfoo"
+        repo.mkdir(parents=True)
+        assert is_vendored_path(repo, tmp_path) is True
+
+    def test_repo_inside_var(self, tmp_path):
+        repo = tmp_path / "var" / "tree-sitter-grammars" / "tree-sitter-commonlisp"
+        repo.mkdir(parents=True)
+        assert is_vendored_path(repo, tmp_path) is True
+
+    def test_repo_inside_external(self, tmp_path):
+        repo = tmp_path / "external" / "some-dep"
+        repo.mkdir(parents=True)
+        assert is_vendored_path(repo, tmp_path) is True
+
+    def test_repo_inside_normal_subdirectory(self, tmp_path):
+        repo = tmp_path / "apps" / "backend"
+        repo.mkdir(parents=True)
+        assert is_vendored_path(repo, tmp_path) is False
+
+    def test_repo_outside_scan_root(self, tmp_path):
+        """Repo outside scan_root should return False, not raise."""
+        scan_root = tmp_path / "projects"
+        scan_root.mkdir()
+        repo = tmp_path / "elsewhere" / "repo"
+        repo.mkdir(parents=True)
+        assert is_vendored_path(repo, scan_root) is False
+
+    def test_case_insensitive_match(self, tmp_path):
+        """Vendored dir names should match case-insensitively."""
+        repo = tmp_path / "Third_Party" / "libfoo"
+        repo.mkdir(parents=True)
+        assert is_vendored_path(repo, tmp_path) is True

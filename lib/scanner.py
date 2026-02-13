@@ -36,6 +36,12 @@ SKIP_DIRS = frozenset({
     "htmlcov", ".eggs", "egg-info",
 })
 
+VENDORED_DIRS = frozenset({
+    "third_party", "third-party", "thirdparty",
+    "external", "extern", "deps",
+    "var",
+})
+
 # ── Linguist-to-gitignore.io mapping ──────────────────────────────────────
 #
 # Most Linguist language names map to gitignore.io slugs by lowercasing
@@ -365,6 +371,15 @@ def safe_to_delete(filepath: str, scan_root: Path) -> bool:
     return is_temp_file(p.name)
 
 
+def is_vendored_path(repo: Path, scan_root: Path) -> bool:
+    """Return True if repo is nested inside a vendored/third-party directory."""
+    try:
+        rel = repo.relative_to(scan_root)
+    except ValueError:
+        return False
+    return any(part.lower() in VENDORED_DIRS for part in rel.parts)
+
+
 def _sanitize_tech_name(tech: str) -> str:
     """Validate and return a safe tech name for use in file paths."""
     if "/" in tech or "\\" in tech or "\0" in tech:
@@ -490,12 +505,23 @@ def build_pathspec(patterns_text: str) -> pathspec.PathSpec:
 
 
 def find_git_repos(scan_root: Path) -> list[Path]:
-    """Find all git repositories under scan_root."""
+    """Find all git repositories under scan_root.
+
+    Skips repos nested inside vendored/third-party directories to avoid
+    false positives from their legitimate source files. Vendored directories
+    are also pruned from the walk to avoid unnecessary filesystem I/O.
+    """
     repos = []
     for dirpath, dirnames, _ in os.walk(scan_root):
-        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        dirnames[:] = [
+            d for d in dirnames
+            if d not in SKIP_DIRS and d.lower() not in VENDORED_DIRS
+        ]
         dp = Path(dirpath)
         if (dp / ".git").exists():
+            if is_vendored_path(dp, scan_root):
+                log(f"  skip vendored repo: {dp}")
+                continue
             repos.append(dp)
     return repos
 
