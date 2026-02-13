@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# dingleberries-report -- run a dry-run scan and open an interactive HTML report
+# in the browser where actions can be approved/denied with checkboxes.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+SCAN_PATH="${1:-$HOME/projects}"
+
+if [[ ! -d "$SCAN_PATH" ]]; then
+    echo "Error: Not a directory: $SCAN_PATH" >&2
+    exit 1
+fi
+
+# Run dry-run scan, pipe JSON to report server
+uv run --project "$PROJECT_ROOT" python "$PROJECT_ROOT/lib/scanner.py" \
+    scan "$SCAN_PATH" --dry-run --verbose 2>/dev/null | \
+uv run --project "$PROJECT_ROOT" python "$PROJECT_ROOT/lib/report_server.py" \
+    --scan-root "$SCAN_PATH"

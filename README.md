@@ -226,12 +226,50 @@ dingleberries ~/projects --dry-run --verbose
 Prints progress to stderr: which repos are being scanned, which templates
 are cached vs fetched, detection results.
 
+### Scheduled Report (HTML)
+
+```bash
+bin/dingleberries-report ~/projects
+```
+
+Runs a dry-run scan, then opens an interactive HTML report in the browser.
+The report shows checkboxes for each action (gitignore updates, `git rm
+--cached`, temp file deletion). Check or uncheck items, click "Apply
+Selected", and only the approved actions are executed.
+
+The report server binds to `127.0.0.1` on a random port (no external
+access) and shuts down automatically after 30 minutes of inactivity or
+immediately after actions are applied.
+
+**Launchd setup (nightly at 9 PM):**
+
+```bash
+# Install
+cp etc/com.fictorial.dingleberries.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.fictorial.dingleberries.plist
+
+# Verify
+launchctl list | grep dingleberries
+
+# Uninstall
+launchctl unload ~/Library/LaunchAgents/com.fictorial.dingleberries.plist
+rm ~/Library/LaunchAgents/com.fictorial.dingleberries.plist
+```
+
+This is off by default. The plist fires at 9 PM daily and logs to
+`~/.dingleberries-report.log`.
+
 ## File Layout
 
 ```
 ~/projects/sys/dingleberries/     # This tool
   bin/dingleberries               # Bash CLI (arg parsing, formatting, prompts)
+  bin/dingleberries-report        # HTML report launcher (pipes scan to server)
   lib/scanner.py                  # Python core (detection, fetching, scanning)
+  lib/report_server.py            # HTTP server for interactive HTML report
+  etc/com.fictorial.dingleberries.plist  # Launchd plist (nightly schedule)
+  tests/test_scanner.py           # Scanner tests
+  tests/test_report_server.py     # Report server tests
   pyproject.toml                  # pathspec dependency, managed by uv
 
 ~/projects/etc/gitignore/         # Template cache
